@@ -22,6 +22,7 @@ jobs:
         with:
           imageName: claude-dev-test
           push: never
+          skipContainerUserIdUpdate: true
           runCmd: |
             set -e
             claude --version
