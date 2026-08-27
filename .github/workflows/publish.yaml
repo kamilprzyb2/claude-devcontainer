@@ -1,0 +1,74 @@
+name: publish
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 5 * * 1"   # Monday 05:00 UTC — refresh apt packages and Claude Code
+  workflow_dispatch:
+
+jobs:
+  # Single-arch build so the image can be loaded locally and actually run
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and smoke test
+        uses: devcontainers/ci@v0.3
+        with:
+          imageName: claude-dev-test
+          push: never
+          runCmd: |
+            set -e
+            claude --version
+            node --version
+            git --version
+            gh --version
+            test "$(whoami)" = "node"
+            test -w /home/node/.claude
+            npm install -g cowsay   # global install without sudo
+            cowsay ok
+
+  publish:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHCR requires a lowercase path; repository_owner preserves your case
+      - name: Compute image name and tags
+        id: meta
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          V=$(tr -d '[:space:]' < VERSION)
+          echo "image=ghcr.io/${OWNER}/claude-dev" >> "$GITHUB_OUTPUT"
+          echo "tags=${V%%.*},${V%.*},${V},latest" >> "$GITHUB_OUTPUT"
+
+      # QEMU for arm64 emulation, buildx for layer-cache metadata
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: devcontainers/ci@v0.3
+        with:
+          imageName: ${{ steps.meta.outputs.image }}
+          imageTag: ${{ steps.meta.outputs.tags }}
+          cacheFrom: ${{ steps.meta.outputs.image }}
+          platform: linux/amd64,linux/arm64
+          noCache: ${{ github.event_name == 'schedule' }}
+          push: always
