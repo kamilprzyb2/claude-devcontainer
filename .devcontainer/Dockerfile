@@ -38,6 +38,10 @@ RUN mkdir /commandhistory \
 # Set `DEVCONTAINER` environment variable to help with orientation
 ENV DEVCONTAINER=true
 
+# UTF-8 for every process, not just zsh. C.UTF-8 is built into glibc, so it
+# needs no locales package. Projects that install one can override LANG.
+ENV LANG=C.UTF-8
+
 # Create Claude config directory and set permissions
 RUN mkdir -p /home/node/.claude && \
   chown -R node:node /home/node/.claude
@@ -65,6 +69,11 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "source /usr/share/doc/fzf/examples/completion.zsh" \
   -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
   -x
+
+# zsh-in-docker's .zshrc exports LANG, LANGUAGE and LC_ALL as en_US.UTF-8, but
+# -x skips the locales package that would generate it, leaving zsh on the plain
+# C locale (non-ASCII input breaks). Drop them and use LANG from above.
+RUN sed -i -E '/^export (LANG|LANGUAGE|LC_ALL)=/d' ~/.zshrc
 
 # Install Claude
 RUN npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}

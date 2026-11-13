@@ -8,10 +8,22 @@ on:
     - cron: "0 5 * * 1"   # Monday 05:00 UTC — refresh apt packages and Claude Code
   workflow_dispatch:
 
+# Releases run one at a time, so two runs can't claim the same patch number.
+# A newer PR push cancels the older run for that PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || 'release' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  # Single-arch build so the image can be loaded locally and actually run
-  test:
+  # Single-arch build so the image can be loaded locally, run, and inventoried
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+      version: ${{ steps.plan.outputs.version }}
+      previous: ${{ steps.plan.outputs.previous }}
     steps:
       - uses: actions/checkout@v7
 
@@ -22,6 +34,7 @@ jobs:
         with:
           imageName: claude-dev-test
           push: never
+          noCache: true
           skipContainerUserIdUpdate: true
           runCmd: |
             set -e
@@ -34,20 +47,37 @@ jobs:
             # sourced from .zshrc; a missing file fails silently at shell start
             test -f /usr/share/doc/fzf/examples/key-bindings.zsh
             test -f /usr/share/doc/fzf/examples/completion.zsh
+            # locale exists (locale warns on stderr otherwise), .zshrc doesn't override it
+            test -z "$(locale 2>&1 >/dev/null)"
+            test -z "$(grep 'en_US' ~/.zshrc)"   # `! grep` would be ignored by set -e
             test "$(whoami)" = "node"
             test -w /home/node/.claude
             npm install -g cowsay   # global install without sudo
             cowsay ok
 
-  publish:
-    needs: test
-    if: github.event_name != 'pull_request'
+      - name: Inventory
+        run: .github/scripts/inventory.sh claude-dev-test > inventory.txt
+
+      # Compares with the latest release's inventory; on PRs this only reports
+      # what merging would release (see the job summary)
+      - name: Plan release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/plan-release.sh inventory.txt
+
+  push:
+    needs: build
+    if: github.event_name != 'pull_request' && needs.build.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
     env:
       BUILDX_NO_DEFAULT_ATTESTATIONS: 1
+      VERSION: ${{ needs.build.outputs.version }}
 
     steps:
       - uses: actions/checkout@v7
@@ -57,11 +87,10 @@ jobs:
         id: meta
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          V=$(tr -d '[:space:]' < VERSION)
           echo "image=ghcr.io/${OWNER}/claude-dev" >> "$GITHUB_OUTPUT"
-          echo "tags=${V%%.*},${V%.*},${V},latest" >> "$GITHUB_OUTPUT"
+          echo "tags=${VERSION%%.*},${VERSION%.*},${VERSION},latest" >> "$GITHUB_OUTPUT"
 
-      # QEMU for arm64 emulation, buildx for layer-cache metadata
+      # QEMU for arm64 emulation
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
@@ -71,12 +100,60 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # No layer cache: a cached apt or npm layer would publish older packages
+      # than the build job just inventoried.
+      #
+      # devcontainers/ci only builds here; the push happens in its post step at
+      # the end of this job. Anything that needs the pushed image belongs in a
+      # later job, not in a step after this one.
       - name: Build and push
         uses: devcontainers/ci@v0.3
         with:
           imageName: ${{ steps.meta.outputs.image }}
           imageTag: ${{ steps.meta.outputs.tags }}
-          cacheFrom: ${{ steps.meta.outputs.image }}
           platform: linux/amd64,linux/arm64
-          noCache: ${{ github.event_name == 'schedule' }}
+          noCache: true
           push: always
+
+  release:
+    needs: [build, push]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # tag + GitHub Release
+    env:
+      IMAGE: ${{ needs.push.outputs.image }}
+      VERSION: ${{ needs.build.outputs.version }}
+      PREVIOUS: ${{ needs.build.outputs.previous }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Inventory what was actually pushed, not the build job's image; minutes
+      # apart, a new Claude Code or apt upload can land in between
+      - name: Inventory published image
+        run: |
+          docker pull --platform linux/amd64 "${IMAGE}:${VERSION}"
+          .github/scripts/inventory.sh "${IMAGE}:${VERSION}" > inventory.txt
+
+      - name: Create GitHub Release
+        run: |
+          {
+            echo '```'
+            echo "docker pull ${IMAGE}:${VERSION}"
+            echo '```'
+            echo
+            if [ -n "$PREVIOUS" ] && gh release download "$PREVIOUS" -p inventory.txt -O previous-inventory.txt; then
+              echo "Changes since ${PREVIOUS}:"
+              echo
+              .github/scripts/inventory-diff.sh previous-inventory.txt inventory.txt
+            else
+              echo "No earlier inventory to compare against."
+            fi
+            echo
+            echo "Full contents in \`inventory.txt\` below."
+          } > notes.md
+          gh release create "v${VERSION}" inventory.txt \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --notes-file notes.md
