@@ -1,4 +1,4 @@
-ARG NODE_VERSION=24
+ARG NODE_VERSION=26
 FROM node:${NODE_VERSION}
 
 ARG CLAUDE_CODE_VERSION=latest
@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   unzip \
   gnupg2 \
   gh \
+  git-delta \
   jq \
   nano \
   vim \
@@ -41,13 +42,6 @@ ENV DEVCONTAINER=true
 RUN mkdir -p /home/node/.claude && \
   chown -R node:node /home/node/.claude
 
-# Syntax-highlighted git diffs
-ARG GIT_DELTA_VERSION=0.18.2
-RUN ARCH=$(dpkg --print-architecture) && \
-  wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
-  dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
-  rm "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb"
-
 # Set up non-root user
 USER node
 
@@ -63,7 +57,7 @@ ENV EDITOR=nano
 ENV VISUAL=nano
 
 # Default powerlevel10k theme
-ARG ZSH_IN_DOCKER_VERSION=1.2.0
+ARG ZSH_IN_DOCKER_VERSION=1.2.1
 RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/v${ZSH_IN_DOCKER_VERSION}/zsh-in-docker.sh)" -- \
   -p git \
   -p fzf \

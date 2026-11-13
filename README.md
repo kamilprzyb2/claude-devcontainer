@@ -11,7 +11,7 @@ Add a `.devcontainer/devcontainer.json` to your project:
 ```jsonc
 {
   "name": "my-project",
-  "image": "ghcr.io/kamilprzyb2/claude-dev:1"
+  "image": "ghcr.io/kamilprzyb2/claude-dev:2"
 }
 ```
 
@@ -23,7 +23,7 @@ Add per-project toolchains as features:
 ```jsonc
 {
   "name": "my-csharp-thing",
-  "image": "ghcr.io/kamilprzyb2/claude-dev:1",
+  "image": "ghcr.io/kamilprzyb2/claude-dev:2",
   "features": {
     "ghcr.io/devcontainers/features/dotnet:2": { "version": "10.0" }
   },
@@ -42,7 +42,7 @@ Anything in your own `devcontainer.json` overrides the image.
 
 ## What's in it
 
-Built on `node:24`. Runs as the non-root `node` user; global npm installs work
+Built on `node:26` (Debian trixie). Runs as the non-root `node` user; global npm installs work
 without sudo.
 
 - Claude Code CLI
@@ -70,16 +70,22 @@ off stays out:
 
 ## Versioning
 
-Tags follow `VERSION`. Publishing `1.2.0` produces:
+Tags follow `VERSION`. Publishing `2.1.0` produces:
 
 ```
-ghcr.io/kamilprzyb2/claude-dev:1        # follows all 1.x
-ghcr.io/kamilprzyb2/claude-dev:1.2      # follows 1.2.x
-ghcr.io/kamilprzyb2/claude-dev:1.2.0
+ghcr.io/kamilprzyb2/claude-dev:2        # follows all 2.x
+ghcr.io/kamilprzyb2/claude-dev:2.1      # follows 2.1.x
+ghcr.io/kamilprzyb2/claude-dev:2.1.0
 ghcr.io/kamilprzyb2/claude-dev:latest
 ```
 
-Pin to `:1`. You get updates and stop at a breaking change.
+Pin to `:2`. You get updates and stop at a breaking change.
+
+Only the current major is rebuilt. Once `2.0.0` shipped, `:1` stopped receiving
+weekly refreshes; it still pulls, but its packages and Claude Code age from there.
+
+**2.0.0** moved the base from `node:24` (Debian bookworm) to `node:26`
+(Debian trixie). Every apt package jumps a Debian release, hence the major bump.
 
 ## Weekly rebuilds
 
@@ -88,7 +94,7 @@ disabled. Nothing in the repo changes — the same commit produces a new image.
 
 This is deliberate. The Dockerfile floats on moving targets: `apt-get install`
 takes whatever Debian currently ships, and Claude Code installs at `@latest`.
-Without a cache-busting rebuild, a project pinned to `:1` would sit on
+Without a cache-busting rebuild, a project pinned to `:2` would sit on
 months-old packages indefinitely.
 
 **Tags are mutable.** `:1.0.0` pulled in January and `:1.0.0` pulled in June
@@ -98,7 +104,9 @@ are not the same image. For a genuinely frozen reference, pull by digest:
 docker pull ghcr.io/kamilprzyb2/claude-dev@sha256:...
 ```
 
-A cleanup job prunes untagged digests weekly, keeping the last 10 for rollback.
+A cleanup job prunes untagged images weekly, keeping the 10 most recent for
+rollback. Each image is counted whole (its amd64 and arm64 manifests with it), and
+manifests that a tagged image still references are never deleted.
 A failed rebuild changes nothing — the previous image stays live.
 
 ## Releasing
@@ -117,8 +125,10 @@ Adapted from
 [anthropics/claude-code/.devcontainer](https://github.com/anthropics/claude-code/tree/main/.devcontainer).
 Differences:
 
-- `node:20` → `node:24` (20 reached EOL in April 2026)
+- `node:20` → `node:26` (20 reached EOL in April 2026; 26 is the current LTS)
 - Firewall script removed, along with its packages and `NET_ADMIN` capability
+- git-delta installed from Debian (packaged since trixie) instead of a pinned
+  GitHub release `.deb`
 - `TZ` moved from a build arg to per-project `containerEnv`, since build args
   don't reach consumers of a prebuilt image
 - Workspace left at the Dev Containers default (`/workspaces/<name>`) rather

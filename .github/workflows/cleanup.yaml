@@ -11,9 +11,12 @@ jobs:
     permissions:
       packages: write
     steps:
-      - uses: actions/delete-package-versions@v5
+      # Multi-arch aware: counts whole images (index + platform manifests) and
+      # never deletes the platform manifests a tagged image still points to.
+      # actions/delete-package-versions treats every manifest as a separate
+      # version, which both skews the count and can break old tags like :1.
+      - uses: dataaxiom/ghcr-cleanup-action@v1
         with:
-          package-name: claude-dev
-          package-type: container
-          min-versions-to-keep: 30
-          delete-only-untagged-versions: true
+          package: claude-dev
+          keep-n-untagged: 10
+          validate: true
